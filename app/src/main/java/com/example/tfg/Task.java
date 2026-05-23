@@ -1,24 +1,28 @@
 package com.example.tfg;
 
 import com.google.firebase.firestore.Exclude;
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
-public class Task {
+public class Task implements Serializable {
     private String id;
     private String title;
     private String description;
     private String category;
     private String userId;
+    private String userEmail;
     private String parentId;
     private Long dueDate;
     private boolean completed;
     private int totalSubtasks;
     private int completedSubtasks;
     private List<Task> subTasks;
+    private List<String> sharedWith;
 
     public Task() {
         this.subTasks = new ArrayList<>();
+        this.sharedWith = new ArrayList<>();
     }
 
     public Task(String title, String description, String category, String userId, String parentId, Long dueDate) {
@@ -32,7 +36,9 @@ public class Task {
         this.totalSubtasks = 0;
         this.completedSubtasks = 0;
         this.subTasks = new ArrayList<>();
+        this.sharedWith = new ArrayList<>();
     }
+
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -48,6 +54,9 @@ public class Task {
 
     public String getUserId() { return userId; }
     public void setUserId(String userId) { this.userId = userId; }
+
+    public String getUserEmail() { return userEmail; }
+    public void setUserEmail(String userEmail) { this.userEmail = userEmail; }
 
     public String getParentId() { return parentId; }
     public void setParentId(String parentId) { this.parentId = parentId; }
@@ -73,4 +82,8 @@ public class Task {
     @Exclude
     public List<Task> getSubTasks() { return subTasks; }
     public void setSubTasks(List<Task> subTasks) { this.subTasks = subTasks; }
+
+    public List<String> getSharedWith() { return sharedWith; }
+    public void setSharedWith(List<String> sharedWith) { this.sharedWith = sharedWith; }
 }
+

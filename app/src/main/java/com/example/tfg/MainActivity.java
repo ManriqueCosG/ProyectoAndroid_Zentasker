@@ -1,7 +1,15 @@
 package com.example.tfg;
 
+import android.app.AlarmManager;
 import android.app.DatePickerDialog;
+import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
+import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -19,8 +27,11 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatDelegate;
 import androidx.appcompat.widget.SearchView;
 import androidx.appcompat.widget.Toolbar;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
@@ -55,6 +66,10 @@ public class MainActivity extends AppCompatActivity {
     
     private View dashboardCard;
     private TextView tvWelcome, tvSummary;
+
+    private View parentProgressContainer;
+    private ProgressBar parentProgressBar;
+    private TextView tvParentProgressPercent;
     
     private FirebaseAuth mAuth;
     private FirebaseFirestore db;
@@ -62,12 +77,25 @@ public class MainActivity extends AppCompatActivity {
     private String userId;
     private String userEmail;
     
+    private SharedPreferences prefs;
+    private static final String PREFS_NAME = "AppPrefs";
+    private static final String KEY_DARK_MODE = "DarkMode";
+    private static final String KEY_TOOLBAR_COLOR = "ToolbarColor";
+
     private Calendar selectedCalendar = Calendar.getInstance();
     private SimpleDateFormat dateFormat = new SimpleDateFormat("dd/MM/yyyy", Locale.getDefault());
     private String[] categories = {"Trabajo", "Casa", "Compra", "Gimnasio", "Otro"};
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        boolean isDarkMode = prefs.getBoolean(KEY_DARK_MODE, false);
+        if (isDarkMode) {
+            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
+        } else {
+            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO);
+        }
+
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
@@ -85,6 +113,7 @@ public class MainActivity extends AppCompatActivity {
 
         toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
+        applyToolbarColor();
         
         ivTaskInfo = findViewById(R.id.ivTaskInfo);
         ivTaskInfo.setOnClickListener(v -> showTaskInfoSheet());
@@ -93,13 +122,17 @@ public class MainActivity extends AppCompatActivity {
         dashboardCard = findViewById(R.id.dashboardCard);
         tvWelcome = findViewById(R.id.tvWelcome);
         tvSummary = findViewById(R.id.tvSummary);
+
+        parentProgressContainer = findViewById(R.id.parentProgressContainer);
+        parentProgressBar = findViewById(R.id.parentProgressBar);
+        tvParentProgressPercent = findViewById(R.id.tvParentProgressPercent);
         
         updateToolbarTitle();
 
         RecyclerView recyclerView = findViewById(R.id.recyclerView);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
 
-        adapter = new TaskAdapter(currentTasks, new TaskAdapter.OnTaskClickListener() {
+        adapter = new TaskAdapter(currentTasks, userId, new TaskAdapter.OnTaskClickListener() {
             @Override
             public void onTaskClick(Task task) {
                 onTaskClicked(task);
@@ -132,44 +165,149 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        checkNotificationPermission();
+        loadTasks();
+    }
+
+    private void checkNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
+            }
+        }
+    }
+
+    private void applyToolbarColor() {
+        int color = prefs.getInt(KEY_TOOLBAR_COLOR, ContextCompat.getColor(this, R.color.black));
+        toolbar.setBackgroundColor(color);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            getWindow().setStatusBarColor(color);
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent); // Importante para que onResume vea los nuevos datos
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        
+        // Manejar navegación desde el calendario
+        Task openTask = (Task) getIntent().getSerializableExtra("OPEN_TASK");
+        if (openTask != null) {
+            getIntent().removeExtra("OPEN_TASK");
+            taskNavigationStack.clear();
+            taskNavigationStack.push(openTask);
+        }
+
         loadTasks();
     }
 
     private void onTaskClicked(Task task) {
-        taskNavigationStack.push(task);
-        loadTasks();
+        if (taskNavigationStack.isEmpty()) {
+            taskNavigationStack.push(task);
+            loadTasks();
+        } else {
+            // Todos los usuarios pueden ver y editar las notas de las subtareas
+            Intent intent = new Intent(this, TaskEditorActivity.class);
+            intent.putExtra("TASK_ID", task.getId());
+            intent.putExtra("TASK_TITLE", task.getTitle());
+            intent.putExtra("TASK_DESC", task.getDescription());
+            startActivity(intent);
+        }
     }
 
     private void loadTasks() {
         progressBar.setVisibility(View.VISIBLE);
         String parentId = taskNavigationStack.isEmpty() ? null : taskNavigationStack.peek().getId();
         
-        Query query = tasksRef.whereEqualTo("userId", userId)
-                             .whereEqualTo("parentId", parentId);
+        if (parentId == null) {
+            // Cargar tareas raíz (propias + compartidas)
+            tasksRef.whereEqualTo("userId", userId)
+                    .whereEqualTo("parentId", null)
+                    .get().addOnCompleteListener(ownerTask -> {
+                if (ownerTask.isSuccessful()) {
+                    List<Task> combinedTasks = new ArrayList<>();
+                    for (QueryDocumentSnapshot document : ownerTask.getResult()) {
+                        Task t = document.toObject(Task.class);
+                        t.setId(document.getId());
+                        combinedTasks.add(t);
+                    }
 
-        query.get().addOnCompleteListener(task -> {
-            progressBar.setVisibility(View.GONE);
-            if (task.isSuccessful()) {
-                currentTasks.clear();
-                int pendingCount = 0;
-                for (QueryDocumentSnapshot document : task.getResult()) {
-                    Task t = document.toObject(Task.class);
-                    t.setId(document.getId());
-                    currentTasks.add(t);
-                    if (!t.isCompleted()) pendingCount++;
+                    tasksRef.whereArrayContains("sharedWith", userEmail)
+                            .whereEqualTo("parentId", null)
+                            .get().addOnCompleteListener(sharedTask -> {
+                                progressBar.setVisibility(View.GONE);
+                                if (sharedTask.isSuccessful()) {
+                                    for (QueryDocumentSnapshot document : sharedTask.getResult()) {
+                                        Task t = document.toObject(Task.class);
+                                        t.setId(document.getId());
+                                        boolean exists = false;
+                                        for(Task existing : combinedTasks) {
+                                            if(existing.getId().equals(t.getId())) { exists = true; break; }
+                                        }
+                                        if(!exists) combinedTasks.add(t);
+                                    }
+                                    finishLoadingTasks(combinedTasks);
+                                } else {
+                                    finishLoadingTasks(combinedTasks);
+                                }
+                            });
+                } else {
+                    progressBar.setVisibility(View.GONE);
                 }
-                
-                // Mover completadas al final
-                Collections.sort(currentTasks, (t1, t2) -> Boolean.compare(t1.isCompleted(), t2.isCompleted()));
-                
-                adapter.updateTasks(currentTasks);
-                updateToolbarTitle();
-                updateDashboard(pendingCount);
+            });
+        } else {
+            // Cargar subtareas: si ya estamos aquí es porque tenemos acceso al padre
+            tasksRef.whereEqualTo("parentId", parentId)
+                    .get().addOnCompleteListener(task -> {
+                        progressBar.setVisibility(View.GONE);
+                        if (task.isSuccessful()) {
+                            List<Task> subtasks = new ArrayList<>();
+                            for (QueryDocumentSnapshot document : task.getResult()) {
+                                Task t = document.toObject(Task.class);
+                                t.setId(document.getId());
+                                // Aseguramos que la descripción viaje
+                                subtasks.add(t);
+                            }
+                            finishLoadingTasks(subtasks);
+                        }
+                    });
+        }
+    }
+
+    private void finishLoadingTasks(List<Task> tasks) {
+        currentTasks.clear();
+        currentTasks.addAll(tasks);
+        
+        int pendingCount = 0;
+        for (Task t : currentTasks) {
+            if (!t.isCompleted()) pendingCount++;
+        }
+        
+        Collections.sort(currentTasks, (t1, t2) -> Boolean.compare(t1.isCompleted(), t2.isCompleted()));
+        
+        adapter.updateTasks(currentTasks);
+        updateToolbarTitle();
+        updateDashboard(pendingCount);
+        scheduleTaskAlarms(currentTasks);
+
+        FloatingActionButton fab = findViewById(R.id.fabAdd);
+        if (!taskNavigationStack.isEmpty()) {
+            Task parent = taskNavigationStack.peek();
+            if (!parent.getUserId().equals(userId)) {
+                fab.setVisibility(View.GONE);
             } else {
-                Log.e(TAG, "Error al cargar tareas: ", task.getException());
-                Toast.makeText(MainActivity.this, "Error al cargar: " + task.getException().getMessage(), Toast.LENGTH_SHORT).show();
+                fab.setVisibility(View.VISIBLE);
             }
-        });
+            updateParentProgressUI(currentTasks);
+        } else {
+            fab.setVisibility(View.VISIBLE);
+            parentProgressContainer.setVisibility(View.GONE);
+        }
     }
 
     private void updateDashboard(int pendingCount) {
@@ -183,8 +321,35 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void updateParentProgressUI(List<Task> subtasks) {
+        if (subtasks.isEmpty()) {
+            parentProgressContainer.setVisibility(View.GONE);
+            return;
+        }
+
+        parentProgressContainer.setVisibility(View.VISIBLE);
+        int total = subtasks.size();
+        int completed = 0;
+        for (Task t : subtasks) {
+            if (t.isCompleted()) completed++;
+        }
+
+        int progress = (total > 0) ? (completed * 100) / total : 0;
+        parentProgressBar.setProgress(progress);
+        tvParentProgressPercent.setText(progress + "%");
+
+        if (progress == 100) {
+            parentProgressBar.setProgressTintList(ColorStateList.valueOf(
+                    ContextCompat.getColor(this, R.color.status_green)));
+        } else {
+            parentProgressBar.setProgressTintList(ColorStateList.valueOf(
+                    ContextCompat.getColor(this, R.color.black)));
+        }
+    }
+
     private void updateToolbarTitle() {
         if (getSupportActionBar() != null) {
+            applyToolbarColor();
             if (taskNavigationStack.isEmpty()) {
                 getSupportActionBar().setTitle("Mis Tareas");
                 getSupportActionBar().setSubtitle(userEmail);
@@ -313,13 +478,65 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         
-        builder.setNeutralButton("Eliminar", (dialog, which) -> {
-            deleteTaskFromFirestore(task.getId());
-        });
+        if (task.getUserId().equals(userId)) {
+            builder.setNeutralButton("Opciones", (dialog, which) -> {
+                showTaskOptions(task);
+            });
+        }
         
         builder.setNegativeButton("Cancelar", (dialog, which) -> dialog.cancel());
 
         builder.show();
+    }
+
+    private void showTaskOptions(Task task) {
+        String[] options = {"Compartir", "Eliminar"};
+        new AlertDialog.Builder(this)
+                .setTitle("Opciones de Tarea")
+                .setItems(options, (dialog, which) -> {
+                    if (which == 0) {
+                        showShareDialog(task);
+                    } else if (which == 1) {
+                        deleteTaskFromFirestore(task.getId());
+                    }
+                })
+                .show();
+    }
+
+    private void showShareDialog(Task task) {
+        EditText etEmail = new EditText(this);
+        etEmail.setHint("Correo electrónico del usuario");
+        etEmail.setPadding(50, 40, 50, 40);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Compartir Tarea")
+                .setMessage("Introduce el correo del usuario con el que quieres compartir esta tarea:")
+                .setView(etEmail)
+                .setPositiveButton("Compartir", (dialog, which) -> {
+                    String email = etEmail.getText().toString().trim();
+                    if (!email.isEmpty()) {
+                        shareTaskWithUser(task, email);
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void shareTaskWithUser(Task task, String email) {
+        WriteBatch batch = db.batch();
+        DocumentReference taskRef = tasksRef.document(task.getId());
+        batch.update(taskRef, "sharedWith", FieldValue.arrayUnion(email));
+
+        // Propagar a subtareas
+        tasksRef.whereEqualTo("parentId", task.getId()).get().addOnSuccessListener(querySnapshot -> {
+            for (QueryDocumentSnapshot doc : querySnapshot) {
+                batch.update(doc.getReference(), "sharedWith", FieldValue.arrayUnion(email));
+            }
+            batch.commit().addOnSuccessListener(aVoid -> {
+                Toast.makeText(this, "Tarea y subtareas compartidas con " + email, Toast.LENGTH_SHORT).show();
+                loadTasks();
+            });
+        });
     }
 
     private void showDatePicker(EditText etDate) {
@@ -334,7 +551,11 @@ public class MainActivity extends AppCompatActivity {
 
     private void saveTaskToFirestore(String title, String description, String category, Long dueDate) {
         String parentId = taskNavigationStack.isEmpty() ? null : taskNavigationStack.peek().getId();
+        List<String> sharedWith = taskNavigationStack.isEmpty() ? new ArrayList<>() : taskNavigationStack.peek().getSharedWith();
+        
         Task newTask = new Task(title, description, category, userId, parentId, dueDate);
+        newTask.setUserEmail(userEmail);
+        newTask.setSharedWith(sharedWith); // Heredar compartidos del padre
 
         tasksRef.add(newTask)
                 .addOnSuccessListener(documentReference -> {
@@ -348,8 +569,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void updateTaskInFirestore(String taskId, String title, String description, String category, Long dueDate) {
         tasksRef.document(taskId)
-                .update("title", title, "description", description, "category", category, "dueDate", dueDate)
+                .update("title", title, 
+                        "description", description, 
+                        "category", category, 
+                        "dueDate", dueDate)
                 .addOnSuccessListener(aVoid -> {
+                    // Actualizar en memoria si es el padre actual
                     if (!taskNavigationStack.isEmpty() && taskNavigationStack.peek().getId().equals(taskId)) {
                         taskNavigationStack.peek().setTitle(title);
                         taskNavigationStack.peek().setDescription(description);
@@ -427,10 +652,41 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void scheduleTaskAlarms(List<Task> tasks) {
+        AlarmManager alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        if (alarmManager == null) return;
+        
+        for (Task task : tasks) {
+            if (task.getId() == null) continue;
+
+            if (!task.isCompleted() && task.getDueDate() != null && task.getDueDate() > System.currentTimeMillis()) {
+                Intent intent = new Intent(this, ReminderReceiver.class);
+                intent.putExtra("TASK_TITLE", task.getTitle());
+                intent.putExtra("TASK_ID", task.getId());
+                
+                PendingIntent pendingIntent = PendingIntent.getBroadcast(
+                        this, 
+                        task.getId().hashCode(), 
+                        intent, 
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                );
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, task.getDueDate(), pendingIntent);
+                } else {
+                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, task.getDueDate(), pendingIntent);
+                }
+            }
+        }
+    }
+
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.main_menu, menu);
         
+        MenuItem darkModeItem = menu.findItem(R.id.action_dark_mode);
+        darkModeItem.setChecked(prefs.getBoolean(KEY_DARK_MODE, false));
+
         MenuItem searchItem = menu.findItem(R.id.action_search);
         SearchView searchView = (SearchView) searchItem.getActionView();
         searchView.setQueryHint("Buscar tareas...");
@@ -453,10 +709,39 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         int id = item.getItemId();
-        if (id == R.id.action_logout) {
+        if (id == R.id.action_calendar) {
+            startActivity(new Intent(this, CalendarActivity.class));
+            return true;
+        } else if (id == R.id.action_logout) {
             mAuth.signOut();
             startActivity(new Intent(MainActivity.this, LoginActivity.class));
             finish();
+            return true;
+        } else if (id == R.id.action_dark_mode) {
+            boolean isDark = !item.isChecked();
+            item.setChecked(isDark);
+            prefs.edit().putBoolean(KEY_DARK_MODE, isDark).apply();
+            
+            if (isDark) {
+                AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
+            } else {
+                AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO);
+            }
+            return true;
+        } else if (id == R.id.color_default) {
+            saveToolbarColor(ContextCompat.getColor(this, R.color.black));
+            return true;
+        } else if (id == R.id.color_red) {
+            saveToolbarColor(Color.parseColor("#D32F2F"));
+            return true;
+        } else if (id == R.id.color_green) {
+            saveToolbarColor(Color.parseColor("#388E3C"));
+            return true;
+        } else if (id == R.id.color_purple) {
+            saveToolbarColor(Color.parseColor("#7B1FA2"));
+            return true;
+        } else if (id == R.id.color_black) {
+            saveToolbarColor(Color.BLACK);
             return true;
         } else if (id == R.id.sort_date) {
             Collections.sort(currentTasks, (t1, t2) -> {
@@ -476,5 +761,10 @@ public class MainActivity extends AppCompatActivity {
             return true;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+    private void saveToolbarColor(int color) {
+        prefs.edit().putInt(KEY_TOOLBAR_COLOR, color).apply();
+        applyToolbarColor();
     }
 }

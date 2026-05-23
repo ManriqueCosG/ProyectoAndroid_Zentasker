@@ -3,6 +3,12 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <item
+        android:id="@+id/action_calendar"
+        android:icon="@android:drawable/ic_menu_today"
+        android:title="Calendario"
+        app:showAsAction="ifRoom" />
+
+    <item
         android:id="@+id/action_search"
         android:icon="@android:drawable/ic_menu_search"
         android:title="Buscar"
@@ -29,9 +35,24 @@
     <item
         android:id="@+id/action_user_menu"
         android:icon="@android:drawable/ic_menu_info_details"
-        android:title="Usuario"
+        android:title="Opciones"
         app:showAsAction="always">
         <menu>
+            <item
+                android:id="@+id/action_dark_mode"
+                android:title="Modo Oscuro"
+                android:checkable="true" />
+            <item
+                android:id="@+id/action_customize_color"
+                android:title="Color de Cabecera">
+                <menu>
+                    <item android:id="@+id/color_default" android:title="Azul (Defecto)" />
+                    <item android:id="@+id/color_red" android:title="Rojo" />
+                    <item android:id="@+id/color_green" android:title="Verde" />
+                    <item android:id="@+id/color_purple" android:title="Morado" />
+                    <item android:id="@+id/color_black" android:title="Negro" />
+                </menu>
+            </item>
             <item
                 android:id="@+id/action_logout"
                 android:icon="@android:drawable/ic_lock_power_off"
