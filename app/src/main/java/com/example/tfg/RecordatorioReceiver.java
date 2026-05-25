@@ -27,7 +27,7 @@ public class RecordatorioReceiver extends BroadcastReceiver {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    "Recordatorios de Tareas",
+                    "Recordatorios Zentasker",
                     NotificationManager.IMPORTANCE_HIGH
             );
             notificationManager.createNotificationChannel(channel);

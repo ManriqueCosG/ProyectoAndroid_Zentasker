@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.text.Html;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
+import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.StyleSpan;
 import android.view.Menu;
@@ -26,6 +27,10 @@ import androidx.appcompat.widget.Toolbar;
 import androidx.core.content.ContextCompat;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.firestore.FirebaseFirestore;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 
 public class TareaEditorActivity extends AppCompatActivity {
 
@@ -55,7 +60,6 @@ public class TareaEditorActivity extends AppCompatActivity {
         }
         toolbar.setNavigationOnClickListener(v -> saveAndExit());
 
-        // Cargar datos en tiempo real desde Firestore
         loadTaskContent();
 
         findViewById(R.id.btnBold).setOnClickListener(v -> applyStyle(new StyleSpan(Typeface.BOLD)));
@@ -110,7 +114,7 @@ public class TareaEditorActivity extends AppCompatActivity {
     private void saveAndExit() {
         String htmlContent = Html.toHtml(etNote.getText(), Html.TO_HTML_PARAGRAPH_LINES_CONSECUTIVE);
         db.collection("tasks").document(taskId)
-                .update("notas", htmlContent)
+                .update("description", "", "notas", htmlContent)
                 .addOnSuccessListener(aVoid -> finish())
                 .addOnFailureListener(e -> {
                     Toast.makeText(this, "Error al guardar", Toast.LENGTH_SHORT).show();
@@ -187,25 +191,56 @@ public class TareaEditorActivity extends AppCompatActivity {
     private void showCollaboratorsDialog() {
         db.collection("tasks").document(taskId).get().addOnSuccessListener(snapshot -> {
             if (snapshot.exists()) {
-                Tarea task = snapshot.toObject(Tarea.class);
-                if (task != null) {
-                    StringBuilder collaborators = new StringBuilder();
-                    collaborators.append("Propietario: ").append(task.getUserEmail() != null ? task.getUserEmail() : "Desconocido").append("\n\n");
+                Tarea currentTask = snapshot.toObject(Tarea.class);
+                if (currentTask != null && currentTask.getParentId() != null) {
+                    db.collection("tasks").document(currentTask.getParentId()).get().addOnSuccessListener(parentSnap -> {
+                        Tarea parentTask = parentSnap.toObject(Tarea.class);
+                        if (parentTask != null) {
+                            db.collection("tasks").whereEqualTo("parentId", currentTask.getParentId()).get().addOnSuccessListener(subtasksSnap -> {
+                                Map<String, Integer> asignadas = new HashMap<>();
+                                Map<String, Integer> completadas = new HashMap<>();
+                                
+                                for (com.google.firebase.firestore.QueryDocumentSnapshot doc : subtasksSnap) {
+                                    String assigned = doc.getString("assignedTo");
+                                    if (assigned != null) asignadas.put(assigned, asignadas.getOrDefault(assigned, 0) + 1);
+                                    
+                                    Boolean done = doc.getBoolean("completed");
+                                    String finisher = doc.getString("lastModifiedByEmail");
+                                    if (done != null && done && finisher != null) {
+                                        completadas.put(finisher, completadas.getOrDefault(finisher, 0) + 1);
+                                    }
+                                }
 
-                    if (task.getSharedWith() != null && !task.getSharedWith().isEmpty()) {
-                        collaborators.append("Colaboradores:\n");
-                        for (String email : task.getSharedWith()) {
-                            collaborators.append("- ").append(email).append("\n");
+                                StringBuilder sb = new StringBuilder();
+                                List<String> todos = new ArrayList<>();
+                                if (parentTask.getUserEmail() != null) todos.add(parentTask.getUserEmail());
+                                if (parentTask.getSharedWith() != null) {
+                                    for (String s : parentTask.getSharedWith()) {
+                                        if (!todos.contains(s)) todos.add(s);
+                                    }
+                                }
+
+                                for (String email : todos) {
+                                    boolean esPropietario = email.equals(parentTask.getUserEmail());
+                                    int countAsignadas = asignadas.getOrDefault(email, 0);
+                                    int countCompletadas = completadas.getOrDefault(email, 0);
+                                    
+                                    sb.append(esPropietario ? "⭐ " : "👤 ")
+                                      .append(email)
+                                      .append("\n   └─ ")
+                                      .append("Completadas: ").append(countCompletadas)
+                                      .append(" | Asignadas: ").append(countAsignadas)
+                                      .append("\n\n");
+                                }
+
+                                new AlertDialog.Builder(this)
+                                        .setTitle("Rendimiento de Colaboradores")
+                                        .setMessage(sb.toString())
+                                        .setPositiveButton("Cerrar", null)
+                                        .show();
+                            });
                         }
-                    } else {
-                        collaborators.append("No hay colaboradores adicionales.");
-                    }
-
-                    new AlertDialog.Builder(this)
-                            .setTitle("Lista de Colaboradores")
-                            .setMessage(collaborators.toString())
-                            .setPositiveButton("Cerrar", null)
-                            .show();
+                    });
                 }
             }
         });
@@ -221,38 +256,24 @@ public class TareaEditorActivity extends AppCompatActivity {
                     
                     TextView tvTitle = view.findViewById(R.id.tvSheetTitle);
                     TextView tvDesc = view.findViewById(R.id.tvSheetDescription);
+                    TextView tvDate = view.findViewById(R.id.tvSheetDate);
                     
                     tvTitle.setText(task.getTitle());
                     
                     SpannableStringBuilder infoCompleta = new SpannableStringBuilder();
-                    
-                    // 1. Mostrar siempre la descripción corta del diálogo primero
                     if (task.getDescription() != null && !task.getDescription().isEmpty()) {
                         infoCompleta.append(task.getDescription());
                     }
-                    
-                    // 2. Añadir las notas del editor (HTML) debajo
                     if (task.getNotas() != null && !task.getNotas().isEmpty()) {
                         if (infoCompleta.length() > 0) infoCompleta.append("\n\n---\nDetalles adicionales:\n\n");
                         infoCompleta.append(Html.fromHtml(task.getNotas(), Html.FROM_HTML_MODE_LEGACY));
                     }
                     
-                    if (infoCompleta.length() > 0) {
-                        tvDesc.setText(infoCompleta);
-                    } else {
-                        tvDesc.setText("Sin descripción ni notas");
-                    }
+                    if (infoCompleta.length() > 0) tvDesc.setText(infoCompleta);
+                    else tvDesc.setText("Sin descripción ni notas");
 
-                    // Mostrar colaboradores
-                    TextView tvDate = view.findViewById(R.id.tvSheetDate);
                     StringBuilder collabInfo = new StringBuilder();
                     collabInfo.append("Propietario: ").append(task.getUserEmail() != null ? task.getUserEmail() : "Desconocido");
-                    if (task.getSharedWith() != null && !task.getSharedWith().isEmpty()) {
-                        collabInfo.append("\nCompartida con:");
-                        for (String email : task.getSharedWith()) {
-                            collabInfo.append("\n - ").append(email);
-                        }
-                    }
                     tvDate.setText(collabInfo.toString());
                     tvDate.setVisibility(View.VISIBLE);
 

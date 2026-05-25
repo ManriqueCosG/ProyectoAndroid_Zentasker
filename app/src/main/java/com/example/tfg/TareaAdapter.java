@@ -54,7 +54,6 @@ public class TareaAdapter extends RecyclerView.Adapter<TareaAdapter.TareaViewHol
         Tarea task = tasks.get(position);
         holder.tvTitle.setText(task.getTitle());
         
-        // Comprobar si es compartida (solo en tareas raíz)
         boolean isShared = task.getUserId() != null && !task.getUserId().equals(currentUserId) && task.getParentId() == null;
         if (isShared) {
             holder.cardView.setStrokeColor(android.graphics.Color.parseColor("#2196F3"));
@@ -68,7 +67,6 @@ public class TareaAdapter extends RecyclerView.Adapter<TareaAdapter.TareaViewHol
             holder.tvSharedLabel.setVisibility(View.GONE);
         }
 
-        // Comprobar asignación
         if (task.getAssignedTo() != null && !task.getAssignedTo().isEmpty()) {
             holder.tvAssignedLabel.setVisibility(View.VISIBLE);
             holder.tvAssignedLabel.setText("Asignada a: " + task.getAssignedTo());
@@ -76,7 +74,6 @@ public class TareaAdapter extends RecyclerView.Adapter<TareaAdapter.TareaViewHol
             holder.tvAssignedLabel.setVisibility(View.GONE);
         }
 
-        // Estilo de completado
         holder.cbCompleted.setOnCheckedChangeListener(null);
         holder.cbCompleted.setChecked(task.isCompleted());
         if (task.isCompleted()) {

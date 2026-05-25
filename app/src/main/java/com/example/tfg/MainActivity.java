@@ -184,7 +184,6 @@ public class MainActivity extends AppCompatActivity {
                 .addSnapshotListener((snapshots, e) -> {
                     if (e != null || snapshots == null) return;
                     
-                    // Si es la carga inicial (todos los documentos vienen como ADDED), la ignoramos
                     if (snapshots.getMetadata().isFromCache()) return;
 
                     for (com.google.firebase.firestore.DocumentChange dc : snapshots.getDocumentChanges()) {
@@ -210,7 +209,7 @@ public class MainActivity extends AppCompatActivity {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             android.app.NotificationChannel channel = new android.app.NotificationChannel(
-                    channelId, "Tareas Completadas", android.app.NotificationManager.IMPORTANCE_HIGH);
+                    channelId, "Colaboración Zentasker", android.app.NotificationManager.IMPORTANCE_HIGH);
             notificationManager.createNotificationChannel(channel);
         }
 
@@ -221,7 +220,7 @@ public class MainActivity extends AppCompatActivity {
 
         androidx.core.app.NotificationCompat.Builder builder = new androidx.core.app.NotificationCompat.Builder(this, channelId)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("¡Tarea terminada!")
+                .setContentTitle("Zentasker: ¡Tarea terminada!")
                 .setContentText(editorName + " ha terminado: " + task.getTitle())
                 .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
@@ -257,19 +256,29 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        setIntent(intent); // Importante para que onResume vea los nuevos datos
+        setIntent(intent);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         
-        // Manejar navegación desde el calendario
         Tarea openTask = (Tarea) getIntent().getSerializableExtra("OPEN_TASK");
         if (openTask != null) {
             getIntent().removeExtra("OPEN_TASK");
-            taskNavigationStack.clear();
-            taskNavigationStack.push(openTask);
+            
+            if (openTask.getParentId() == null) {
+                // Es una tarea principal: Entrar a ver su lista de subtareas
+                taskNavigationStack.clear();
+                taskNavigationStack.push(openTask);
+            } else {
+                // Es una subtarea: Abrir el editor de notas directamente
+                Intent intent = new Intent(this, TareaEditorActivity.class);
+                intent.putExtra("TASK_ID", openTask.getId());
+                intent.putExtra("TASK_TITLE", openTask.getTitle());
+                intent.putExtra("TASK_DESC", openTask.getDescription());
+                startActivity(intent);
+            }
         }
 
         loadTasks();
@@ -332,7 +341,6 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         } else {
-            // Cargar subtareas: si ya estamos aquí es porque tenemos acceso al padre
             tasksRef.whereEqualTo("parentId", parentId)
                     .get().addOnCompleteListener(task -> {
                         progressBar.setVisibility(View.GONE);
@@ -341,7 +349,6 @@ public class MainActivity extends AppCompatActivity {
                             for (QueryDocumentSnapshot document : task.getResult()) {
                                 Tarea t = document.toObject(Tarea.class);
                                 t.setId(document.getId());
-                                // Aseguramos que la descripción viaje
                                 subtasks.add(t);
                             }
                             finishLoadingTasks(subtasks);
@@ -440,21 +447,44 @@ public class MainActivity extends AppCompatActivity {
         if (taskNavigationStack.isEmpty()) return;
         Tarea task = taskNavigationStack.peek();
         
-        StringBuilder collaborators = new StringBuilder();
-        collaborators.append("Propietario: ").append(task.getUserEmail() != null ? task.getUserEmail() : "Desconocido").append("\n\n");
+        // Mapas para contar estadísticas
+        java.util.Map<String, Integer> asignadas = new java.util.HashMap<>();
+        java.util.Map<String, Integer> completadas = new java.util.HashMap<>();
         
-        if (task.getSharedWith() != null && !task.getSharedWith().isEmpty()) {
-            collaborators.append("Colaboradores:\n");
-            for (String email : task.getSharedWith()) {
-                collaborators.append("- ").append(email).append("\n");
+        for (Tarea t : currentTasks) {
+            if (t.getAssignedTo() != null) {
+                asignadas.put(t.getAssignedTo(), asignadas.getOrDefault(t.getAssignedTo(), 0) + 1);
             }
-        } else {
-            collaborators.append("No hay colaboradores adicionales.");
+            if (t.isCompleted() && t.getLastModifiedByEmail() != null) {
+                completadas.put(t.getLastModifiedByEmail(), completadas.getOrDefault(t.getLastModifiedByEmail(), 0) + 1);
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        List<String> todos = new ArrayList<>();
+        if (task.getUserEmail() != null) todos.add(task.getUserEmail());
+        if (task.getSharedWith() != null) {
+            for (String s : task.getSharedWith()) {
+                if (!todos.contains(s)) todos.add(s);
+            }
+        }
+
+        for (String email : todos) {
+            boolean esPropietario = email.equals(task.getUserEmail());
+            int countAsignadas = asignadas.getOrDefault(email, 0);
+            int countCompletadas = completadas.getOrDefault(email, 0);
+            
+            sb.append(esPropietario ? "⭐ " : "👤 ")
+              .append(email)
+              .append("\n   └─ ")
+              .append("Completadas: ").append(countCompletadas)
+              .append(" | Asignadas: ").append(countAsignadas)
+              .append("\n\n");
         }
 
         new AlertDialog.Builder(this)
-                .setTitle("Lista de Colaboradores")
-                .setMessage(collaborators.toString())
+                .setTitle("Rendimiento de Colaboradores")
+                .setMessage(sb.toString())
                 .setPositiveButton("Cerrar", null)
                 .show();
     }
@@ -996,6 +1026,9 @@ public class MainActivity extends AppCompatActivity {
         if (id == R.id.action_calendar) {
             startActivity(new Intent(this, CalendarioActivity.class));
             return true;
+        } else if (id == R.id.action_search) {
+            // No hacemos nada aquí, el sistema expandirá el SearchView automáticamente
+            return false;
         } else if (id == R.id.action_view_info) {
             showTaskInfoSheet();
             return true;
