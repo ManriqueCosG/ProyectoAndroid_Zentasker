@@ -13,12 +13,12 @@
         android:icon="@android:drawable/ic_menu_search"
         android:title="Buscar"
         app:actionViewClass="androidx.appcompat.widget.SearchView"
-        app:showAsAction="ifRoom|collapseActionView" />
+        app:showAsAction="never" />
 
     <item
         android:id="@+id/action_sort"
-        android:icon="@android:drawable/ic_menu_sort_by_size"
-        android:title="Ordenar">
+        android:title="Ordenar"
+        app:showAsAction="never">
         <menu>
             <item
                 android:id="@+id/sort_date"
@@ -33,30 +33,38 @@
     </item>
 
     <item
-        android:id="@+id/action_user_menu"
-        android:icon="@android:drawable/ic_menu_info_details"
-        android:title="Opciones"
-        app:showAsAction="always">
+        android:id="@+id/action_view_info"
+        android:title="Ver Información"
+        android:visible="false"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_colaboradores"
+        android:title="Colaboradores"
+        android:visible="false"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_dark_mode"
+        android:title="Modo Oscuro"
+        android:checkable="true"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_customize_color"
+        android:title="Color de Cabecera"
+        app:showAsAction="never">
         <menu>
-            <item
-                android:id="@+id/action_dark_mode"
-                android:title="Modo Oscuro"
-                android:checkable="true" />
-            <item
-                android:id="@+id/action_customize_color"
-                android:title="Color de Cabecera">
-                <menu>
-                    <item android:id="@+id/color_default" android:title="Azul (Defecto)" />
-                    <item android:id="@+id/color_red" android:title="Rojo" />
-                    <item android:id="@+id/color_green" android:title="Verde" />
-                    <item android:id="@+id/color_purple" android:title="Morado" />
-                    <item android:id="@+id/color_black" android:title="Negro" />
-                </menu>
-            </item>
-            <item
-                android:id="@+id/action_logout"
-                android:icon="@android:drawable/ic_lock_power_off"
-                android:title="Cerrar Sesión" />
+            <item android:id="@+id/color_default" android:title="Azul (Defecto)" />
+            <item android:id="@+id/color_red" android:title="Rojo" />
+            <item android:id="@+id/color_green" android:title="Verde" />
+            <item android:id="@+id/color_purple" android:title="Morado" />
+            <item android:id="@+id/color_black" android:title="Negro" />
         </menu>
     </item>
+
+    <item
+        android:id="@+id/action_logout"
+        android:title="Cerrar Sesión"
+        app:showAsAction="never" />
 </menu>

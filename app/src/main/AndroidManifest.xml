@@ -27,7 +27,7 @@
         </activity>
 
         <activity
-            android:name=".RegisterActivity"
+            android:name=".RegistroActivity"
             android:exported="false" />
 
         <activity
@@ -35,15 +35,15 @@
             android:exported="false" />
 
         <activity
-            android:name=".TaskEditorActivity"
+            android:name=".TareaEditorActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
         <activity
-            android:name=".CalendarActivity"
+            android:name=".CalendarioActivity"
             android:exported="false" />
 
-        <receiver android:name=".ReminderReceiver" android:exported="false" />
+        <receiver android:name=".RecordatorioReceiver" android:exported="false" />
 
     </application>
 

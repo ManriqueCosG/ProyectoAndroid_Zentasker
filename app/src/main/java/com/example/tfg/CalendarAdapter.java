@@ -24,6 +24,7 @@ public class CalendarAdapter extends RecyclerView.Adapter<CalendarAdapter.Calend
 
     public interface OnDateClickListener {
         void onDateClick(Date date);
+        void onDateLongClick(Date date);
     }
 
     public CalendarAdapter(List<Date> days, Calendar currentMonth, Set<String> taskDays, OnDateClickListener listener) {
@@ -36,7 +37,7 @@ public class CalendarAdapter extends RecyclerView.Adapter<CalendarAdapter.Calend
     @NonNull
     @Override
     public CalendarViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_calendar_day, parent, false);
+        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_dia_calendario, parent, false);
         return new CalendarViewHolder(view);
     }
 
@@ -74,6 +75,10 @@ public class CalendarAdapter extends RecyclerView.Adapter<CalendarAdapter.Calend
         }
 
         holder.itemView.setOnClickListener(v -> listener.onDateClick(date));
+        holder.itemView.setOnLongClickListener(v -> {
+            listener.onDateLongClick(date);
+            return true;
+        });
     }
 
     @Override

@@ -3,6 +3,7 @@ package com.example.tfg;
 import android.app.AlarmManager;
 import android.app.DatePickerDialog;
 import android.app.PendingIntent;
+import android.app.TimePickerDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -34,6 +35,7 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.firebase.auth.FirebaseAuth;
@@ -42,6 +44,7 @@ import com.google.firebase.firestore.CollectionReference;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.Query;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
 import com.google.firebase.firestore.WriteBatch;
@@ -57,12 +60,12 @@ import java.util.Stack;
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
-    private List<Task> currentTasks = new ArrayList<>();
-    private Stack<Task> taskNavigationStack = new Stack<>();
-    private TaskAdapter adapter;
+    private List<Tarea> currentTasks = new ArrayList<>();
+    private Stack<Tarea> taskNavigationStack = new Stack<>();
+    private TareaAdapter adapter;
     private Toolbar toolbar;
-    private ImageView ivTaskInfo;
     private ProgressBar progressBar;
+    private SwipeRefreshLayout swipeRefreshLayout;
     
     private View dashboardCard;
     private TextView tvWelcome, tvSummary;
@@ -76,6 +79,7 @@ public class MainActivity extends AppCompatActivity {
     private CollectionReference tasksRef;
     private String userId;
     private String userEmail;
+    private ListenerRegistration notificationListener;
     
     private SharedPreferences prefs;
     private static final String PREFS_NAME = "AppPrefs";
@@ -84,6 +88,7 @@ public class MainActivity extends AppCompatActivity {
 
     private Calendar selectedCalendar = Calendar.getInstance();
     private SimpleDateFormat dateFormat = new SimpleDateFormat("dd/MM/yyyy", Locale.getDefault());
+    private SimpleDateFormat timeFormat = new SimpleDateFormat("HH:mm", Locale.getDefault());
     private String[] categories = {"Trabajo", "Casa", "Compra", "Gimnasio", "Otro"};
 
     @Override
@@ -115,10 +120,8 @@ public class MainActivity extends AppCompatActivity {
         setSupportActionBar(toolbar);
         applyToolbarColor();
         
-        ivTaskInfo = findViewById(R.id.ivTaskInfo);
-        ivTaskInfo.setOnClickListener(v -> showTaskInfoSheet());
-
         progressBar = findViewById(R.id.progressBar);
+        swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout);
         dashboardCard = findViewById(R.id.dashboardCard);
         tvWelcome = findViewById(R.id.tvWelcome);
         tvSummary = findViewById(R.id.tvSummary);
@@ -132,19 +135,19 @@ public class MainActivity extends AppCompatActivity {
         RecyclerView recyclerView = findViewById(R.id.recyclerView);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
 
-        adapter = new TaskAdapter(currentTasks, userId, new TaskAdapter.OnTaskClickListener() {
+        adapter = new TareaAdapter(currentTasks, userId, new TareaAdapter.OnTaskClickListener() {
             @Override
-            public void onTaskClick(Task task) {
+            public void onTaskClick(Tarea task) {
                 onTaskClicked(task);
             }
 
             @Override
-            public void onTaskLongClick(Task task) {
+            public void onTaskLongClick(Tarea task) {
                 showEditTaskDialog(task);
             }
 
             @Override
-            public void onTaskStatusChanged(Task task, boolean isCompleted) {
+            public void onTaskStatusChanged(Tarea task, boolean isCompleted) {
                 updateTaskCompletionInFirestore(task, isCompleted);
             }
         });
@@ -165,8 +168,74 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        swipeRefreshLayout.setOnRefreshListener(this::loadTasks);
+        swipeRefreshLayout.setColorSchemeColors(ContextCompat.getColor(this, R.color.black));
+
         checkNotificationPermission();
+        setupCompletionListener();
         loadTasks();
+    }
+
+    private void setupCompletionListener() {
+        // Escuchar tareas propias que han sido completadas por otros
+        // Nota: Solo nos interesan los cambios ocurridos DESPUÉS de abrir la app
+        notificationListener = tasksRef.whereEqualTo("userId", userId)
+                .whereEqualTo("completed", true)
+                .addSnapshotListener((snapshots, e) -> {
+                    if (e != null || snapshots == null) return;
+                    
+                    // Si es la carga inicial (todos los documentos vienen como ADDED), la ignoramos
+                    if (snapshots.getMetadata().isFromCache()) return;
+
+                    for (com.google.firebase.firestore.DocumentChange dc : snapshots.getDocumentChanges()) {
+                        if (dc.getType() == com.google.firebase.firestore.DocumentChange.Type.ADDED || 
+                            dc.getType() == com.google.firebase.firestore.DocumentChange.Type.MODIFIED) {
+                            
+                            Tarea task = dc.getDocument().toObject(Tarea.class);
+                            task.setId(dc.getDocument().getId()); // Corregido: Asignar ID manualmente
+                            
+                            String lastModifiedBy = dc.getDocument().getString("lastModifiedBy");
+
+                            if (task.isCompleted() && lastModifiedBy != null && !lastModifiedBy.equals(userId)) {
+                                sendTaskCompletionNotification(task);
+                            }
+                        }
+                    }
+                });
+    }
+
+    private void sendTaskCompletionNotification(Tarea task) {
+        android.app.NotificationManager notificationManager = (android.app.NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        String channelId = "completion_notifications";
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.app.NotificationChannel channel = new android.app.NotificationChannel(
+                    channelId, "Tareas Completadas", android.app.NotificationManager.IMPORTANCE_HIGH);
+            notificationManager.createNotificationChannel(channel);
+        }
+
+        android.app.PendingIntent pendingIntent = android.app.PendingIntent.getActivity(this, 0, 
+                new Intent(this, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE);
+
+        String editorName = task.getLastModifiedByEmail() != null ? task.getLastModifiedByEmail() : "Un colaborador";
+
+        androidx.core.app.NotificationCompat.Builder builder = new androidx.core.app.NotificationCompat.Builder(this, channelId)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("¡Tarea terminada!")
+                .setContentText(editorName + " ha terminado: " + task.getTitle())
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent);
+
+        notificationManager.notify(task.getId().hashCode(), builder.build());
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (notificationListener != null) {
+            notificationListener.remove();
+        }
     }
 
     private void checkNotificationPermission() {
@@ -196,7 +265,7 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         
         // Manejar navegación desde el calendario
-        Task openTask = (Task) getIntent().getSerializableExtra("OPEN_TASK");
+        Tarea openTask = (Tarea) getIntent().getSerializableExtra("OPEN_TASK");
         if (openTask != null) {
             getIntent().removeExtra("OPEN_TASK");
             taskNavigationStack.clear();
@@ -206,13 +275,13 @@ public class MainActivity extends AppCompatActivity {
         loadTasks();
     }
 
-    private void onTaskClicked(Task task) {
+    private void onTaskClicked(Tarea task) {
         if (taskNavigationStack.isEmpty()) {
             taskNavigationStack.push(task);
             loadTasks();
         } else {
             // Todos los usuarios pueden ver y editar las notas de las subtareas
-            Intent intent = new Intent(this, TaskEditorActivity.class);
+            Intent intent = new Intent(this, TareaEditorActivity.class);
             intent.putExtra("TASK_ID", task.getId());
             intent.putExtra("TASK_TITLE", task.getTitle());
             intent.putExtra("TASK_DESC", task.getDescription());
@@ -221,7 +290,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void loadTasks() {
-        progressBar.setVisibility(View.VISIBLE);
+        if (!swipeRefreshLayout.isRefreshing()) {
+            progressBar.setVisibility(View.VISIBLE);
+        }
         String parentId = taskNavigationStack.isEmpty() ? null : taskNavigationStack.peek().getId();
         
         if (parentId == null) {
@@ -230,9 +301,9 @@ public class MainActivity extends AppCompatActivity {
                     .whereEqualTo("parentId", null)
                     .get().addOnCompleteListener(ownerTask -> {
                 if (ownerTask.isSuccessful()) {
-                    List<Task> combinedTasks = new ArrayList<>();
+                    List<Tarea> combinedTasks = new ArrayList<>();
                     for (QueryDocumentSnapshot document : ownerTask.getResult()) {
-                        Task t = document.toObject(Task.class);
+                        Tarea t = document.toObject(Tarea.class);
                         t.setId(document.getId());
                         combinedTasks.add(t);
                     }
@@ -243,10 +314,10 @@ public class MainActivity extends AppCompatActivity {
                                 progressBar.setVisibility(View.GONE);
                                 if (sharedTask.isSuccessful()) {
                                     for (QueryDocumentSnapshot document : sharedTask.getResult()) {
-                                        Task t = document.toObject(Task.class);
+                                        Tarea t = document.toObject(Tarea.class);
                                         t.setId(document.getId());
                                         boolean exists = false;
-                                        for(Task existing : combinedTasks) {
+                                        for(Tarea existing : combinedTasks) {
                                             if(existing.getId().equals(t.getId())) { exists = true; break; }
                                         }
                                         if(!exists) combinedTasks.add(t);
@@ -266,9 +337,9 @@ public class MainActivity extends AppCompatActivity {
                     .get().addOnCompleteListener(task -> {
                         progressBar.setVisibility(View.GONE);
                         if (task.isSuccessful()) {
-                            List<Task> subtasks = new ArrayList<>();
+                            List<Tarea> subtasks = new ArrayList<>();
                             for (QueryDocumentSnapshot document : task.getResult()) {
-                                Task t = document.toObject(Task.class);
+                                Tarea t = document.toObject(Tarea.class);
                                 t.setId(document.getId());
                                 // Aseguramos que la descripción viaje
                                 subtasks.add(t);
@@ -279,12 +350,13 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void finishLoadingTasks(List<Task> tasks) {
+    private void finishLoadingTasks(List<Tarea> tasks) {
+        swipeRefreshLayout.setRefreshing(false);
         currentTasks.clear();
         currentTasks.addAll(tasks);
         
         int pendingCount = 0;
-        for (Task t : currentTasks) {
+        for (Tarea t : currentTasks) {
             if (!t.isCompleted()) pendingCount++;
         }
         
@@ -297,7 +369,7 @@ public class MainActivity extends AppCompatActivity {
 
         FloatingActionButton fab = findViewById(R.id.fabAdd);
         if (!taskNavigationStack.isEmpty()) {
-            Task parent = taskNavigationStack.peek();
+            Tarea parent = taskNavigationStack.peek();
             if (!parent.getUserId().equals(userId)) {
                 fab.setVisibility(View.GONE);
             } else {
@@ -321,7 +393,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void updateParentProgressUI(List<Task> subtasks) {
+    private void updateParentProgressUI(List<Tarea> subtasks) {
         if (subtasks.isEmpty()) {
             parentProgressContainer.setVisibility(View.GONE);
             return;
@@ -330,7 +402,7 @@ public class MainActivity extends AppCompatActivity {
         parentProgressContainer.setVisibility(View.VISIBLE);
         int total = subtasks.size();
         int completed = 0;
-        for (Task t : subtasks) {
+        for (Tarea t : subtasks) {
             if (t.isCompleted()) completed++;
         }
 
@@ -354,37 +426,89 @@ public class MainActivity extends AppCompatActivity {
                 getSupportActionBar().setTitle("Mis Tareas");
                 getSupportActionBar().setSubtitle(userEmail);
                 getSupportActionBar().setDisplayHomeAsUpEnabled(false);
-                ivTaskInfo.setVisibility(View.GONE);
             } else {
-                Task currentParent = taskNavigationStack.peek();
+                Tarea currentParent = taskNavigationStack.peek();
                 getSupportActionBar().setTitle(currentParent.getTitle());
                 getSupportActionBar().setSubtitle(null);
                 getSupportActionBar().setDisplayHomeAsUpEnabled(true);
-                ivTaskInfo.setVisibility(View.VISIBLE);
             }
+            invalidateOptionsMenu(); // Actualizar visibilidad de "Ver Información"
         }
+    }
+
+    private void showCollaboratorsDialog() {
+        if (taskNavigationStack.isEmpty()) return;
+        Tarea task = taskNavigationStack.peek();
+        
+        StringBuilder collaborators = new StringBuilder();
+        collaborators.append("Propietario: ").append(task.getUserEmail() != null ? task.getUserEmail() : "Desconocido").append("\n\n");
+        
+        if (task.getSharedWith() != null && !task.getSharedWith().isEmpty()) {
+            collaborators.append("Colaboradores:\n");
+            for (String email : task.getSharedWith()) {
+                collaborators.append("- ").append(email).append("\n");
+            }
+        } else {
+            collaborators.append("No hay colaboradores adicionales.");
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("Lista de Colaboradores")
+                .setMessage(collaborators.toString())
+                .setPositiveButton("Cerrar", null)
+                .show();
     }
 
     private void showTaskInfoSheet() {
         if (taskNavigationStack.isEmpty()) return;
-        Task task = taskNavigationStack.peek();
+        Tarea task = taskNavigationStack.peek();
 
         BottomSheetDialog bottomSheetDialog = new BottomSheetDialog(this);
-        View view = getLayoutInflater().inflate(R.layout.layout_task_info, null);
+        View view = getLayoutInflater().inflate(R.layout.layout_info_tarea, null);
 
         TextView tvTitle = view.findViewById(R.id.tvSheetTitle);
         TextView tvDesc = view.findViewById(R.id.tvSheetDescription);
         TextView tvDate = view.findViewById(R.id.tvSheetDate);
 
         tvTitle.setText(task.getTitle());
-        tvDesc.setText(task.getDescription() != null && !task.getDescription().isEmpty() 
-                ? task.getDescription() : "Sin descripción");
         
+        android.text.SpannableStringBuilder infoCompleta = new android.text.SpannableStringBuilder();
+        
+        // 1. Añadir la descripción del diálogo si existe
+        if (task.getDescription() != null && !task.getDescription().isEmpty()) {
+            infoCompleta.append(task.getDescription());
+        }
+        
+        // 2. Añadir las notas del editor debajo si existen
+        if (task.getNotas() != null && !task.getNotas().isEmpty()) {
+            if (infoCompleta.length() > 0) infoCompleta.append("\n\n---\nDetalles adicionales:\n\n");
+            infoCompleta.append(android.text.Html.fromHtml(task.getNotas(), android.text.Html.FROM_HTML_MODE_LEGACY));
+        }
+        
+        if (infoCompleta.length() > 0) {
+            tvDesc.setText(infoCompleta);
+        } else {
+            tvDesc.setText("Sin descripción");
+        }
+
+        // 3. Mostrar colaboradores (Dueño + compartidos)
+        StringBuilder collabInfo = new StringBuilder();
+        collabInfo.append("Propietario: ").append(task.getUserEmail() != null ? task.getUserEmail() : "Desconocido");
+        if (task.getSharedWith() != null && !task.getSharedWith().isEmpty()) {
+            collabInfo.append("\nCompartida con:");
+            for (String email : task.getSharedWith()) {
+                collabInfo.append("\n - ").append(email);
+            }
+        }
+        
+        // Podemos usar el TextView de fecha o añadir uno nuevo en el layout.
+        // Por simplicidad, lo añadiremos a la descripción si no hay fecha.
         if (task.getDueDate() != null) {
-            tvDate.setText("Vencimiento: " + dateFormat.format(new Date(task.getDueDate())));
+            tvDate.setText("Vencimiento: " + dateFormat.format(new Date(task.getDueDate())) + "\n\n" + collabInfo.toString());
             tvDate.setVisibility(View.VISIBLE);
         } else {
-            tvDate.setVisibility(View.GONE);
+            tvDate.setText(collabInfo.toString());
+            tvDate.setVisibility(View.VISIBLE);
         }
 
         bottomSheetDialog.setContentView(view);
@@ -406,18 +530,50 @@ public class MainActivity extends AppCompatActivity {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Nueva Tarea");
 
-        View viewInflated = LayoutInflater.from(this).inflate(R.layout.dialog_add_task, null);
+        View viewInflated = LayoutInflater.from(this).inflate(R.layout.dialog_anadir_tarea, null);
         final EditText input = viewInflated.findViewById(R.id.etTaskName);
         final EditText etDesc = viewInflated.findViewById(R.id.etTaskDescription);
         final EditText etDate = viewInflated.findViewById(R.id.etDueDate);
+        final EditText etTime = viewInflated.findViewById(R.id.etDueTime);
+        final com.google.android.material.textfield.TextInputLayout tilDueTime = viewInflated.findViewById(R.id.tilDueTime);
         final Spinner spinner = viewInflated.findViewById(R.id.spinnerCategory);
+        final Spinner spinnerAssign = viewInflated.findViewById(R.id.spinnerAssign);
+        final TextView tvAssignLabel = viewInflated.findViewById(R.id.tvAssignLabel);
+        
+        // Configurar spinner de asignación si hay colaboradores
+        List<String> collaborators = new ArrayList<>();
+        collaborators.add("Sin asignar");
+        if (!taskNavigationStack.isEmpty()) {
+            Tarea parent = taskNavigationStack.peek();
+            if (parent.getSharedWith() != null && !parent.getSharedWith().isEmpty()) {
+                collaborators.addAll(parent.getSharedWith());
+                // También añadir al dueño si el actual no es el dueño
+                if (parent.getUserEmail() != null && !collaborators.contains(parent.getUserEmail())) {
+                    collaborators.add(parent.getUserEmail());
+                }
+                
+                ArrayAdapter<String> assignAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, collaborators);
+                assignAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+                spinnerAssign.setAdapter(assignAdapter);
+                spinnerAssign.setVisibility(View.VISIBLE);
+                tvAssignLabel.setVisibility(View.VISIBLE);
+            }
+        }
+        
+        // Forzar limpieza de campos por seguridad
+        input.setText("");
+        etDesc.setText("");
+        etDate.setText("");
+        etTime.setText("");
+        tilDueTime.setVisibility(View.GONE);
         
         ArrayAdapter<String> spinnerAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, categories);
         spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(spinnerAdapter);
         spinner.setSelection(4); // Por defecto "Otro"
 
-        etDate.setOnClickListener(v -> showDatePicker(etDate));
+        etDate.setOnClickListener(v -> showDatePicker(etDate, etTime, tilDueTime));
+        etTime.setOnClickListener(v -> showTimePicker(etTime));
 
         builder.setView(viewInflated);
 
@@ -425,9 +581,14 @@ public class MainActivity extends AppCompatActivity {
             String taskTitle = input.getText().toString().trim();
             String taskDesc = etDesc.getText().toString().trim();
             String category = spinner.getSelectedItem().toString();
+            String assignedTo = null;
+            if (spinnerAssign.getVisibility() == View.VISIBLE && spinnerAssign.getSelectedItemPosition() > 0) {
+                assignedTo = (String) spinnerAssign.getSelectedItem();
+            }
             Long dueDate = etDate.getText().toString().isEmpty() ? null : selectedCalendar.getTimeInMillis();
+            boolean hasTime = !etTime.getText().toString().isEmpty();
             if (!taskTitle.isEmpty()) {
-                saveTaskToFirestore(taskTitle, taskDesc, category, dueDate);
+                saveTaskToFirestore(taskTitle, taskDesc, category, dueDate, assignedTo, hasTime);
             }
         });
         builder.setNegativeButton("Cancelar", (dialog, which) -> dialog.cancel());
@@ -435,23 +596,69 @@ public class MainActivity extends AppCompatActivity {
         builder.show();
     }
 
-    private void showEditTaskDialog(Task task) {
+    private void showEditTaskDialog(Tarea task) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Editar Tarea");
 
-        View viewInflated = LayoutInflater.from(this).inflate(R.layout.dialog_add_task, null);
+        View viewInflated = LayoutInflater.from(this).inflate(R.layout.dialog_anadir_tarea, null);
         final EditText input = viewInflated.findViewById(R.id.etTaskName);
         final EditText etDesc = viewInflated.findViewById(R.id.etTaskDescription);
         final EditText etDate = viewInflated.findViewById(R.id.etDueDate);
+        final EditText etTime = viewInflated.findViewById(R.id.etDueTime);
+        final com.google.android.material.textfield.TextInputLayout tilDueTime = viewInflated.findViewById(R.id.tilDueTime);
         final Spinner spinner = viewInflated.findViewById(R.id.spinnerCategory);
+        final Spinner spinnerAssign = viewInflated.findViewById(R.id.spinnerAssign);
+        final TextView tvAssignLabel = viewInflated.findViewById(R.id.tvAssignLabel);
         
         ArrayAdapter<String> spinnerAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, categories);
         spinnerAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(spinnerAdapter);
 
+        // Configurar spinner de asignación si hay colaboradores (en la tarea actual o padre)
+        List<String> collaborators = new ArrayList<>();
+        collaborators.add("Sin asignar");
+        
+        Tarea taskContext = taskNavigationStack.isEmpty() ? task : taskNavigationStack.peek();
+        boolean isOwner = task.getUserId().equals(userId);
+
+        if (isOwner && taskContext.getSharedWith() != null && !taskContext.getSharedWith().isEmpty()) {
+            collaborators.addAll(taskContext.getSharedWith());
+            if (taskContext.getUserEmail() != null && !collaborators.contains(taskContext.getUserEmail())) {
+                collaborators.add(taskContext.getUserEmail());
+            }
+            
+            ArrayAdapter<String> assignAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, collaborators);
+            assignAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            spinnerAssign.setAdapter(assignAdapter);
+            spinnerAssign.setVisibility(View.VISIBLE);
+            tvAssignLabel.setVisibility(View.VISIBLE);
+            
+            if (task.getAssignedTo() != null) {
+                int pos = collaborators.indexOf(task.getAssignedTo());
+                if (pos >= 0) spinnerAssign.setSelection(pos);
+            }
+        } else if (task.getAssignedTo() != null) {
+            // Mostrar a quién está asignada pero sin permitir cambiarlo si no eres el dueño
+            collaborators.add(task.getAssignedTo());
+            ArrayAdapter<String> assignAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, collaborators);
+            spinnerAssign.setAdapter(assignAdapter);
+            spinnerAssign.setEnabled(false);
+            spinnerAssign.setVisibility(View.VISIBLE);
+            tvAssignLabel.setVisibility(View.VISIBLE);
+        }
+
         input.setText(task.getTitle());
         etDesc.setText(task.getDescription());
         
+        if (!isOwner) {
+            input.setEnabled(false);
+            etDesc.setEnabled(false);
+            etDate.setEnabled(false);
+            etTime.setEnabled(false);
+            spinner.setEnabled(false);
+            builder.setTitle("Detalles de Tarea (Solo Lectura)");
+        }
+
         for (int i = 0; i < categories.length; i++) {
             if (categories[i].equals(task.getCategory())) {
                 spinner.setSelection(i);
@@ -462,34 +669,51 @@ public class MainActivity extends AppCompatActivity {
         if (task.getDueDate() != null) {
             selectedCalendar.setTimeInMillis(task.getDueDate());
             etDate.setText(dateFormat.format(new Date(task.getDueDate())));
+            if (task.isHasTime()) {
+                etTime.setText(timeFormat.format(new Date(task.getDueDate())));
+                tilDueTime.setVisibility(View.VISIBLE);
+            } else {
+                etTime.setText("");
+                tilDueTime.setVisibility(View.GONE);
+            }
+        } else {
+            etDate.setText("");
+            etTime.setText("");
+            tilDueTime.setVisibility(View.GONE);
         }
 
-        etDate.setOnClickListener(v -> showDatePicker(etDate));
+        etDate.setOnClickListener(v -> showDatePicker(etDate, etTime, tilDueTime));
+        etTime.setOnClickListener(v -> showTimePicker(etTime));
 
         builder.setView(viewInflated);
 
-        builder.setPositiveButton("Guardar", (dialog, which) -> {
-            String taskTitle = input.getText().toString().trim();
-            String taskDesc = etDesc.getText().toString().trim();
-            String category = spinner.getSelectedItem().toString();
-            Long dueDate = etDate.getText().toString().isEmpty() ? null : selectedCalendar.getTimeInMillis();
-            if (!taskTitle.isEmpty()) {
-                updateTaskInFirestore(task.getId(), taskTitle, taskDesc, category, dueDate);
-            }
-        });
-        
-        if (task.getUserId().equals(userId)) {
+        if (isOwner) {
+            builder.setPositiveButton("Guardar", (dialog, which) -> {
+                String taskTitle = input.getText().toString().trim();
+                String taskDesc = etDesc.getText().toString().trim();
+                String category = spinner.getSelectedItem().toString();
+                String assignedTo = null;
+                if (spinnerAssign.getVisibility() == View.VISIBLE && spinnerAssign.getSelectedItemPosition() > 0) {
+                    assignedTo = (String) spinnerAssign.getSelectedItem();
+                }
+                Long dueDate = etDate.getText().toString().isEmpty() ? null : selectedCalendar.getTimeInMillis();
+                boolean hasTime = !etTime.getText().toString().isEmpty();
+                if (!taskTitle.isEmpty()) {
+                    updateTaskInFirestore(task.getId(), taskTitle, taskDesc, category, dueDate, assignedTo, hasTime);
+                }
+            });
+
             builder.setNeutralButton("Opciones", (dialog, which) -> {
                 showTaskOptions(task);
             });
         }
         
-        builder.setNegativeButton("Cancelar", (dialog, which) -> dialog.cancel());
+        builder.setNegativeButton(isOwner ? "Cancelar" : "Cerrar", (dialog, which) -> dialog.cancel());
 
         builder.show();
     }
 
-    private void showTaskOptions(Task task) {
+    private void showTaskOptions(Tarea task) {
         String[] options = {"Compartir", "Eliminar"};
         new AlertDialog.Builder(this)
                 .setTitle("Opciones de Tarea")
@@ -503,10 +727,10 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    private void showShareDialog(Task task) {
+    private void showShareDialog(Tarea task) {
         EditText etEmail = new EditText(this);
         etEmail.setHint("Correo electrónico del usuario");
-        etEmail.setPadding(50, 40, 50, 40);
+        etEmail.setPadding(60, 40, 60, 40);
 
         new AlertDialog.Builder(this)
                 .setTitle("Compartir Tarea")
@@ -514,15 +738,17 @@ public class MainActivity extends AppCompatActivity {
                 .setView(etEmail)
                 .setPositiveButton("Compartir", (dialog, which) -> {
                     String email = etEmail.getText().toString().trim();
-                    if (!email.isEmpty()) {
+                    if (!email.isEmpty() && email.contains("@")) {
                         shareTaskWithUser(task, email);
+                    } else {
+                        Toast.makeText(this, "Introduce un correo válido", Toast.LENGTH_SHORT).show();
                     }
                 })
                 .setNegativeButton("Cancelar", null)
                 .show();
     }
 
-    private void shareTaskWithUser(Task task, String email) {
+    private void shareTaskWithUser(Tarea task, String email) {
         WriteBatch batch = db.batch();
         DocumentReference taskRef = tasksRef.document(task.getId());
         batch.update(taskRef, "sharedWith", FieldValue.arrayUnion(email));
@@ -539,23 +765,35 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void showDatePicker(EditText etDate) {
+    private void showDatePicker(EditText etDate, EditText etTime, View tilTime) {
         new DatePickerDialog(this, (view, year, month, dayOfMonth) -> {
             selectedCalendar.set(Calendar.YEAR, year);
             selectedCalendar.set(Calendar.MONTH, month);
             selectedCalendar.set(Calendar.DAY_OF_MONTH, dayOfMonth);
             etDate.setText(dateFormat.format(selectedCalendar.getTime()));
+            if (tilTime != null) tilTime.setVisibility(View.VISIBLE);
         }, selectedCalendar.get(Calendar.YEAR), selectedCalendar.get(Calendar.MONTH), 
            selectedCalendar.get(Calendar.DAY_OF_MONTH)).show();
     }
 
-    private void saveTaskToFirestore(String title, String description, String category, Long dueDate) {
+    private void showTimePicker(EditText etTime) {
+        new TimePickerDialog(this, (view, hourOfDay, minute) -> {
+            selectedCalendar.set(Calendar.HOUR_OF_DAY, hourOfDay);
+            selectedCalendar.set(Calendar.MINUTE, minute);
+            selectedCalendar.set(Calendar.SECOND, 0);
+            etTime.setText(timeFormat.format(selectedCalendar.getTime()));
+        }, selectedCalendar.get(Calendar.HOUR_OF_DAY), selectedCalendar.get(Calendar.MINUTE), true).show();
+    }
+
+    private void saveTaskToFirestore(String title, String description, String category, Long dueDate, String assignedTo, boolean hasTime) {
         String parentId = taskNavigationStack.isEmpty() ? null : taskNavigationStack.peek().getId();
         List<String> sharedWith = taskNavigationStack.isEmpty() ? new ArrayList<>() : taskNavigationStack.peek().getSharedWith();
         
-        Task newTask = new Task(title, description, category, userId, parentId, dueDate);
+        Tarea newTask = new Tarea(title, description, category, userId, parentId, dueDate);
         newTask.setUserEmail(userEmail);
         newTask.setSharedWith(sharedWith); // Heredar compartidos del padre
+        newTask.setAssignedTo(assignedTo);
+        newTask.setHasTime(hasTime);
 
         tasksRef.add(newTask)
                 .addOnSuccessListener(documentReference -> {
@@ -567,12 +805,14 @@ public class MainActivity extends AppCompatActivity {
                 .addOnFailureListener(e -> Toast.makeText(MainActivity.this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show());
     }
 
-    private void updateTaskInFirestore(String taskId, String title, String description, String category, Long dueDate) {
+    private void updateTaskInFirestore(String taskId, String title, String description, String category, Long dueDate, String assignedTo, boolean hasTime) {
         tasksRef.document(taskId)
                 .update("title", title, 
                         "description", description, 
                         "category", category, 
-                        "dueDate", dueDate)
+                        "dueDate", dueDate,
+                        "assignedTo", assignedTo,
+                        "hasTime", hasTime)
                 .addOnSuccessListener(aVoid -> {
                     // Actualizar en memoria si es el padre actual
                     if (!taskNavigationStack.isEmpty() && taskNavigationStack.peek().getId().equals(taskId)) {
@@ -580,15 +820,19 @@ public class MainActivity extends AppCompatActivity {
                         taskNavigationStack.peek().setDescription(description);
                         taskNavigationStack.peek().setCategory(category);
                         taskNavigationStack.peek().setDueDate(dueDate);
+                        taskNavigationStack.peek().setAssignedTo(assignedTo);
+                        taskNavigationStack.peek().setHasTime(hasTime);
                     }
                     loadTasks();
                 })
                 .addOnFailureListener(e -> Toast.makeText(this, "Error al actualizar", Toast.LENGTH_SHORT).show());
     }
 
-    private void updateTaskCompletionInFirestore(Task task, boolean isCompleted) {
+    private void updateTaskCompletionInFirestore(Tarea task, boolean isCompleted) {
         tasksRef.document(task.getId())
-                .update("completed", isCompleted)
+                .update("completed", isCompleted, 
+                        "lastModifiedBy", userId,
+                        "lastModifiedByEmail", userEmail)
                 .addOnSuccessListener(aVoid -> {
                     task.setCompleted(isCompleted);
                     if (task.getParentId() != null) {
@@ -601,7 +845,7 @@ public class MainActivity extends AppCompatActivity {
     private void updateParentProgress(String parentId, int totalChange, int completedChange) {
         db.runTransaction(transaction -> {
             DocumentReference parentRef = tasksRef.document(parentId);
-            Task parent = transaction.get(parentRef).toObject(Task.class);
+            Tarea parent = transaction.get(parentRef).toObject(Tarea.class);
             if (parent != null) {
                 int newTotal = parent.getTotalSubtasks() + totalChange;
                 int newCompleted = parent.getCompletedSubtasks() + completedChange;
@@ -611,7 +855,9 @@ public class MainActivity extends AppCompatActivity {
                 transaction.update(parentRef, 
                     "totalSubtasks", newTotal,
                     "completedSubtasks", newCompleted,
-                    "completed", isCompleted
+                    "completed", isCompleted,
+                    "lastModifiedBy", userId,
+                    "lastModifiedByEmail", userEmail
                 );
             }
             return null;
@@ -621,7 +867,7 @@ public class MainActivity extends AppCompatActivity {
     private void deleteTaskFromFirestore(String taskId) {
         progressBar.setVisibility(View.VISIBLE);
         tasksRef.document(taskId).get().addOnSuccessListener(documentSnapshot -> {
-            Task task = documentSnapshot.toObject(Task.class);
+            Tarea task = documentSnapshot.toObject(Tarea.class);
             if (task != null && task.getParentId() != null) {
                 updateParentProgress(task.getParentId(), -1, task.isCompleted() ? -1 : 0);
             }
@@ -652,31 +898,53 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void scheduleTaskAlarms(List<Task> tasks) {
+    private void scheduleTaskAlarms(List<Tarea> tasks) {
         AlarmManager alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
         if (alarmManager == null) return;
         
-        for (Task task : tasks) {
-            if (task.getId() == null) continue;
+        long now = System.currentTimeMillis();
 
-            if (!task.isCompleted() && task.getDueDate() != null && task.getDueDate() > System.currentTimeMillis()) {
-                Intent intent = new Intent(this, ReminderReceiver.class);
-                intent.putExtra("TASK_TITLE", task.getTitle());
-                intent.putExtra("TASK_ID", task.getId());
-                
-                PendingIntent pendingIntent = PendingIntent.getBroadcast(
-                        this, 
-                        task.getId().hashCode(), 
-                        intent, 
-                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-                );
+        for (Tarea task : tasks) {
+            if (task.getId() == null || task.isCompleted() || task.getDueDate() == null) continue;
+            
+            long due = task.getDueDate();
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, task.getDueDate(), pendingIntent);
-                } else {
-                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, task.getDueDate(), pendingIntent);
+            // 1. Alarma en el momento exacto
+            if (due > now) {
+                scheduleAlarm(alarmManager, task, due, RecordatorioReceiver.TYPE_EXACT);
+            } else {
+                // Tarea vencida: Notificar una vez si es la primera vez que la vemos
+                // (Para simplificar, notificamos si está pendiente y vencida)
+                // triggerImmediateNotification(task, RecordatorioReceiver.TYPE_EXPIRED);
+            }
+
+            // 2. Alarma "Queda poco" (30 min antes) - Solo si tiene hora especificada
+            if (task.isHasTime()) {
+                long soon = due - (30 * 60 * 1000); // 30 minutos antes
+                if (soon > now) {
+                    scheduleAlarm(alarmManager, task, soon, RecordatorioReceiver.TYPE_SOON);
                 }
             }
+        }
+    }
+
+    private void scheduleAlarm(AlarmManager am, Tarea task, long time, int type) {
+        Intent intent = new Intent(this, RecordatorioReceiver.class);
+        intent.putExtra("TASK_TITLE", task.getTitle());
+        intent.putExtra("TASK_ID", task.getId());
+        intent.putExtra(RecordatorioReceiver.EXTRA_TYPE, type);
+        
+        PendingIntent pi = PendingIntent.getBroadcast(
+                this, 
+                (task.getId() + type).hashCode(), 
+                intent, 
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, time, pi);
+        } else {
+            am.setExact(AlarmManager.RTC_WAKEUP, time, pi);
         }
     }
 
@@ -685,23 +953,39 @@ public class MainActivity extends AppCompatActivity {
         getMenuInflater().inflate(R.menu.main_menu, menu);
         
         MenuItem darkModeItem = menu.findItem(R.id.action_dark_mode);
-        darkModeItem.setChecked(prefs.getBoolean(KEY_DARK_MODE, false));
+        if (darkModeItem != null) {
+            darkModeItem.setChecked(prefs.getBoolean(KEY_DARK_MODE, false));
+        }
+
+        MenuItem infoItem = menu.findItem(R.id.action_view_info);
+        if (infoItem != null) {
+            infoItem.setVisible(!taskNavigationStack.isEmpty());
+        }
+
+        MenuItem colabItem = menu.findItem(R.id.action_colaboradores);
+        if (colabItem != null) {
+            colabItem.setVisible(!taskNavigationStack.isEmpty());
+        }
 
         MenuItem searchItem = menu.findItem(R.id.action_search);
-        SearchView searchView = (SearchView) searchItem.getActionView();
-        searchView.setQueryHint("Buscar tareas...");
-        searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
-            @Override
-            public boolean onQueryTextSubmit(String query) {
-                return false;
-            }
+        if (searchItem != null) {
+            SearchView searchView = (SearchView) searchItem.getActionView();
+            if (searchView != null) {
+                searchView.setQueryHint("Buscar tareas...");
+                searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
+                    @Override
+                    public boolean onQueryTextSubmit(String query) {
+                        return false;
+                    }
 
-            @Override
-            public boolean onQueryTextChange(String newText) {
-                adapter.getFilter().filter(newText);
-                return false;
+                    @Override
+                    public boolean onQueryTextChange(String newText) {
+                        adapter.getFilter().filter(newText);
+                        return false;
+                    }
+                });
             }
-        });
+        }
         
         return true;
     }
@@ -710,7 +994,13 @@ public class MainActivity extends AppCompatActivity {
     public boolean onOptionsItemSelected(@NonNull MenuItem item) {
         int id = item.getItemId();
         if (id == R.id.action_calendar) {
-            startActivity(new Intent(this, CalendarActivity.class));
+            startActivity(new Intent(this, CalendarioActivity.class));
+            return true;
+        } else if (id == R.id.action_view_info) {
+            showTaskInfoSheet();
+            return true;
+        } else if (id == R.id.action_colaboradores) {
+            showCollaboratorsDialog();
             return true;
         } else if (id == R.id.action_logout) {
             mAuth.signOut();
@@ -721,7 +1011,6 @@ public class MainActivity extends AppCompatActivity {
             boolean isDark = !item.isChecked();
             item.setChecked(isDark);
             prefs.edit().putBoolean(KEY_DARK_MODE, isDark).apply();
-            
             if (isDark) {
                 AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
             } else {

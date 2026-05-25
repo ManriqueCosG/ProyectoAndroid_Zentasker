@@ -5,27 +5,32 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
-public class Task implements Serializable {
+public class Tarea implements Serializable {
     private String id;
     private String title;
     private String description;
+    private String notas;
     private String category;
     private String userId;
     private String userEmail;
     private String parentId;
     private Long dueDate;
+    private boolean hasTime;
+    private String assignedTo;
+    private String lastModifiedBy;
+    private String lastModifiedByEmail;
     private boolean completed;
     private int totalSubtasks;
     private int completedSubtasks;
-    private List<Task> subTasks;
+    private List<Tarea> subTasks;
     private List<String> sharedWith;
 
-    public Task() {
+    public Tarea() {
         this.subTasks = new ArrayList<>();
         this.sharedWith = new ArrayList<>();
     }
 
-    public Task(String title, String description, String category, String userId, String parentId, Long dueDate) {
+    public Tarea(String title, String description, String category, String userId, String parentId, Long dueDate) {
         this.title = title;
         this.description = description;
         this.category = category;
@@ -49,6 +54,9 @@ public class Task implements Serializable {
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
 
+    public String getNotas() { return notas; }
+    public void setNotas(String notas) { this.notas = notas; }
+
     public String getCategory() { return category; }
     public void setCategory(String category) { this.category = category; }
 
@@ -63,6 +71,18 @@ public class Task implements Serializable {
 
     public Long getDueDate() { return dueDate; }
     public void setDueDate(Long dueDate) { this.dueDate = dueDate; }
+
+    public boolean isHasTime() { return hasTime; }
+    public void setHasTime(boolean hasTime) { this.hasTime = hasTime; }
+
+    public String getAssignedTo() { return assignedTo; }
+    public void setAssignedTo(String assignedTo) { this.assignedTo = assignedTo; }
+
+    public String getLastModifiedBy() { return lastModifiedBy; }
+    public void setLastModifiedBy(String lastModifiedBy) { this.lastModifiedBy = lastModifiedBy; }
+
+    public String getLastModifiedByEmail() { return lastModifiedByEmail; }
+    public void setLastModifiedByEmail(String lastModifiedByEmail) { this.lastModifiedByEmail = lastModifiedByEmail; }
 
     public boolean isCompleted() { return completed; }
     public void setCompleted(boolean completed) { this.completed = completed; }
@@ -80,10 +100,9 @@ public class Task implements Serializable {
     }
 
     @Exclude
-    public List<Task> getSubTasks() { return subTasks; }
-    public void setSubTasks(List<Task> subTasks) { this.subTasks = subTasks; }
+    public List<Tarea> getSubTasks() { return subTasks; }
+    public void setSubTasks(List<Tarea> subTasks) { this.subTasks = subTasks; }
 
     public List<String> getSharedWith() { return sharedWith; }
     public void setSharedWith(List<String> sharedWith) { this.sharedWith = sharedWith; }
 }
-

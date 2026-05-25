@@ -21,21 +21,21 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-public class TaskAdapter extends RecyclerView.Adapter<TaskAdapter.TaskViewHolder> implements Filterable {
+public class TareaAdapter extends RecyclerView.Adapter<TareaAdapter.TareaViewHolder> implements Filterable {
 
-    private List<Task> tasks;
-    private List<Task> tasksFull;
+    private List<Tarea> tasks;
+    private List<Tarea> tasksFull;
     private String currentUserId;
     private final OnTaskClickListener listener;
     private final SimpleDateFormat dateFormat = new SimpleDateFormat("dd/MM/yyyy", Locale.getDefault());
 
     public interface OnTaskClickListener {
-        void onTaskClick(Task task);
-        void onTaskLongClick(Task task);
-        void onTaskStatusChanged(Task task, boolean isCompleted);
+        void onTaskClick(Tarea task);
+        void onTaskLongClick(Tarea task);
+        void onTaskStatusChanged(Tarea task, boolean isCompleted);
     }
 
-    public TaskAdapter(List<Task> tasks, String currentUserId, OnTaskClickListener listener) {
+    public TareaAdapter(List<Tarea> tasks, String currentUserId, OnTaskClickListener listener) {
         this.tasks = tasks;
         this.tasksFull = new ArrayList<>(tasks);
         this.currentUserId = currentUserId;
@@ -44,14 +44,14 @@ public class TaskAdapter extends RecyclerView.Adapter<TaskAdapter.TaskViewHolder
 
     @NonNull
     @Override
-    public TaskViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_task, parent, false);
-        return new TaskViewHolder(view);
+    public TareaViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_tarea, parent, false);
+        return new TareaViewHolder(view);
     }
 
     @Override
-    public void onBindViewHolder(@NonNull TaskViewHolder holder, int position) {
-        Task task = tasks.get(position);
+    public void onBindViewHolder(@NonNull TareaViewHolder holder, int position) {
+        Tarea task = tasks.get(position);
         holder.tvTitle.setText(task.getTitle());
         
         // Comprobar si es compartida (solo en tareas raíz)
@@ -66,6 +66,14 @@ public class TaskAdapter extends RecyclerView.Adapter<TaskAdapter.TaskViewHolder
             holder.cardView.setStrokeColor(ContextCompat.getColor(holder.itemView.getContext(), R.color.gray_medium));
             holder.cardView.setStrokeWidth(2);
             holder.tvSharedLabel.setVisibility(View.GONE);
+        }
+
+        // Comprobar asignación
+        if (task.getAssignedTo() != null && !task.getAssignedTo().isEmpty()) {
+            holder.tvAssignedLabel.setVisibility(View.VISIBLE);
+            holder.tvAssignedLabel.setText("Asignada a: " + task.getAssignedTo());
+        } else {
+            holder.tvAssignedLabel.setVisibility(View.GONE);
         }
 
         // Estilo de completado
@@ -135,7 +143,7 @@ public class TaskAdapter extends RecyclerView.Adapter<TaskAdapter.TaskViewHolder
         return tasks.size();
     }
 
-    public void updateTasks(List<Task> newTasks) {
+    public void updateTasks(List<Tarea> newTasks) {
         this.tasks = newTasks;
         this.tasksFull = new ArrayList<>(newTasks);
         notifyDataSetChanged();
@@ -149,12 +157,12 @@ public class TaskAdapter extends RecyclerView.Adapter<TaskAdapter.TaskViewHolder
     private Filter taskFilter = new Filter() {
         @Override
         protected FilterResults performFiltering(CharSequence constraint) {
-            List<Task> filteredList = new ArrayList<>();
+            List<Tarea> filteredList = new ArrayList<>();
             if (constraint == null || constraint.length() == 0) {
                 filteredList.addAll(tasksFull);
             } else {
                 String filterPattern = constraint.toString().toLowerCase().trim();
-                for (Task item : tasksFull) {
+                for (Tarea item : tasksFull) {
                     if (item.getTitle().toLowerCase().contains(filterPattern)) {
                         filteredList.add(item);
                     }
@@ -173,18 +181,19 @@ public class TaskAdapter extends RecyclerView.Adapter<TaskAdapter.TaskViewHolder
         }
     };
 
-    public static class TaskViewHolder extends RecyclerView.ViewHolder {
-        public final TextView tvTitle, tvDate, tvSharedLabel;
+    public static class TareaViewHolder extends RecyclerView.ViewHolder {
+        public final TextView tvTitle, tvDate, tvSharedLabel, tvAssignedLabel;
         public final View indicator;
         public final ImageView ivCategory;
         public final CheckBox cbCompleted;
         public final com.google.android.material.card.MaterialCardView cardView;
 
-        public TaskViewHolder(@NonNull View itemView) {
+        public TareaViewHolder(@NonNull View itemView) {
             super(itemView);
             tvTitle = itemView.findViewById(R.id.tvTaskTitle);
             tvDate = itemView.findViewById(R.id.tvDueDate);
             tvSharedLabel = itemView.findViewById(R.id.tvSharedLabel);
+            tvAssignedLabel = itemView.findViewById(R.id.tvAssignedLabel);
             indicator = itemView.findViewById(R.id.indicatorPriority);
             ivCategory = itemView.findViewById(R.id.ivCategoryIcon);
             cbCompleted = itemView.findViewById(R.id.cbCompleted);

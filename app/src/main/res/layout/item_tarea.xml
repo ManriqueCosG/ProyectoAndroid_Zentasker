@@ -63,8 +63,17 @@
                 android:textSize="11sp"
                 android:textStyle="bold"
                 android:visibility="gone"
-                tools:text="Compartida por: user@mail.com"
-                tools:visibility="visible" />
+                tools:text="Compartida por: user@mail.com" />
+
+            <TextView
+                android:id="@+id/tvAssignedLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#4CAF50"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:visibility="gone"
+                tools:text="Asignada a: user@mail.com" />
 
             <TextView
                 android:id="@+id/tvDueDate"
