@@ -7,6 +7,13 @@
     android:padding="24dp"
     android:gravity="center">
 
+    <ImageView
+        android:layout_width="100dp"
+        android:layout_height="100dp"
+        android:src="@drawable/logo"
+        android:layout_marginBottom="16dp"
+        android:contentDescription="Logo Zentasker" />
+
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

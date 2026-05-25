@@ -7,10 +7,17 @@
     android:padding="24dp"
     android:gravity="center">
 
+    <ImageView
+        android:layout_width="120dp"
+        android:layout_height="120dp"
+        android:src="@drawable/logo"
+        android:layout_marginBottom="16dp"
+        android:contentDescription="Logo Zentasker" />
+
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Gestor de Tareas"
+        android:text="Zentasker"
         android:textSize="32sp"
         android:textStyle="bold"
         android:layout_marginBottom="32dp"
